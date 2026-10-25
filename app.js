@@ -182,6 +182,16 @@
         if (!state.chart || !state.nodes.length) return;
         const mobile = window.innerWidth <= 680;
         const maxNodes = mobile ? 60 : (window.innerWidth <= 960 ? 95 : 140);
+        const graphInsets = {
+            left: mobile ? 12 : 56,
+            top: mobile ? 70 : 84,
+            right: mobile ? 24 : 42,
+            bottom: mobile ? 62 : 42
+        };
+        const focusPoint = {
+            x: graphInsets.left + Math.max(state.chart.getWidth() - graphInsets.left - graphInsets.right, 0) / 2,
+            y: graphInsets.top + Math.max(state.chart.getHeight() - graphInsets.top - graphInsets.bottom, 0) / 2
+        };
         let candidates = state.nodes.filter(node => matchesModule(node, state.module) && matchesCategory(node, state.category));
         let visibleNodes;
 
@@ -201,16 +211,22 @@
         const chartNodes = visibleNodes.map(node => {
             categoryCounts[node.category] += 1;
             const selected = node.id === state.focusId;
-            return {
+            const chartNode = {
                 ...node,
                 value: state.degree.get(node.id) || 0,
                 symbol: ['circle', 'roundRect', 'diamond'][node.category],
                 symbolSize: selected ? Math.max(Number(node.symbolSize) || 24, 42) : clamp(Number(node.symbolSize) || 24, 17, 35),
                 itemStyle: selected ? { borderColor: '#202124', borderWidth: 4, shadowBlur: 18, shadowColor: 'rgba(32,33,36,0.28)' } : undefined
             };
+            if (selected) {
+                chartNode.x = focusPoint.x;
+                chartNode.y = focusPoint.y;
+                chartNode.fixed = true;
+            }
+            return chartNode;
         });
 
-        state.zoom = mobile ? 0.62 : 0.78;
+        state.zoom = state.focusId ? (mobile ? 0.78 : 0.92) : (mobile ? 0.62 : 0.78);
         const option = {
             animationDuration: 500,
             animationDurationUpdate: 350,
@@ -234,10 +250,10 @@
                 id: 'knowledgeGraph',
                 type: 'graph',
                 layout: 'force',
-                left: mobile ? 12 : 56,
-                top: mobile ? 70 : 84,
-                right: mobile ? 24 : 42,
-                bottom: mobile ? 62 : 42,
+                left: graphInsets.left,
+                top: graphInsets.top,
+                right: graphInsets.right,
+                bottom: graphInsets.bottom,
                 data: chartNodes,
                 links: visibleLinks,
                 categories: CATEGORY_NAMES.map((name, index) => ({ name, itemStyle: { color: COLORS[index] } })),
@@ -276,7 +292,18 @@
         };
 
         state.chart.setOption(option, true);
+        emphasizeFocusedNode(chartNodes);
         updateSummary(candidates.length, chartNodes.length, visibleLinks.length, categoryCounts);
+    }
+
+    function emphasizeFocusedNode(chartNodes) {
+        if (!state.focusId) return;
+        const dataIndex = chartNodes.findIndex(node => node.id === state.focusId);
+        if (dataIndex < 0) return;
+        window.requestAnimationFrame(() => {
+            state.chart?.dispatchAction({ type: 'downplay', seriesId: 'knowledgeGraph' });
+            state.chart?.dispatchAction({ type: 'highlight', seriesId: 'knowledgeGraph', dataIndex });
+        });
     }
 
     function nodePriority(node) {
@@ -294,7 +321,12 @@
             .filter(id => allowed.has(id) && !seen.has(id));
 
         direct.sort((a, b) => nodePriority(state.nodeById.get(b)) - nodePriority(state.nodeById.get(a)));
-        direct.forEach(id => { if (selectedIds.length < limit) { seen.add(id); selectedIds.push(id); } });
+        direct.forEach(id => {
+            if (selectedIds.length < limit && !seen.has(id)) {
+                seen.add(id);
+                selectedIds.push(id);
+            }
+        });
 
         for (const parentId of [...selectedIds]) {
             if (selectedIds.length >= limit) break;
@@ -304,6 +336,7 @@
                 .sort((a, b) => nodePriority(state.nodeById.get(b)) - nodePriority(state.nodeById.get(a)));
             for (const id of neighbors) {
                 if (selectedIds.length >= limit) break;
+                if (seen.has(id)) continue;
                 seen.add(id);
                 selectedIds.push(id);
             }
@@ -462,9 +495,14 @@
         const node = state.nodeById.get(id);
         if (!node) return;
         state.focusId = id;
-        if (rerender) renderGraph();
         showDetail(node);
         closeMobileFilters();
+        if (rerender) {
+            window.requestAnimationFrame(() => {
+                state.chart?.resize();
+                renderGraph();
+            });
+        }
     }
 
     function showDetail(node) {
